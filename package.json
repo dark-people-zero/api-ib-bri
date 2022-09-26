@@ -13,12 +13,16 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.1",
+    "html-table-to-json": "^1.0.0",
+    "mysql2": "^2.3.3",
     "nodemon": "^2.0.20",
     "request": "^2.88.2",
+    "sequelize": "^6.23.1",
     "socket.io": "^4.5.2",
     "unirest": "^0.6.0"
   },
   "devDependencies": {
-    "electron": "^20.2.0"
+    "electron": "^20.2.0",
+    "sequelize-cli": "^6.4.1"
   }
 }
