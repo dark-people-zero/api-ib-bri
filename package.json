@@ -2,23 +2,21 @@
   "name": "ib",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "socket.js",
   "scripts": {
-    "start": "electron .",
+    "start": "nodemon .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "cheerio": "^1.0.0-rc.12",
-    "cherio": "^1.0.0-rc.2",
-    "jquery": "^3.6.1",
-    "node-tesseract-ocr": "^2.2.1",
-    "readimage": "^1.1.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.1",
+    "nodemon": "^2.0.20",
     "request": "^2.88.2",
-    "tesseract.js": "^3.0.3",
-    "text-from-image": "^1.1.1"
+    "socket.io": "^4.5.2",
+    "unirest": "^0.6.0"
   },
   "devDependencies": {
     "electron": "^20.2.0"
