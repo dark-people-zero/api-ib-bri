@@ -1,21 +1,10 @@
 const express = require("express");
-const { createServer } = require("http");
-const { Server } = require("socket.io");
-const fs = require("fs/promises");
 const unirest = require("unirest");
-const HtmlTableToJson = require('html-table-to-json');
-
-const db = require("./models");
-
+const { chromium } = require('playwright');
+const randomUseragent = require('random-useragent');
 const app = express();
-app.use(express.json());
 
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: "https://ib.bri.co.id",
-  },
-});
+app.use(express.json());
 
 function getCaptcha(img, cb) {
   var username = "admin";
@@ -28,68 +17,11 @@ function getCaptcha(img, cb) {
     .end(cb);
 }
 
-var globalSocket = null;
-
-io.on("connection", (socket) => {
-    console.log(socket.id);
-    globalSocket = socket.id;
-    socket.on("captcha4D", (img, cb) => {
-        getCaptcha(img, function (res) {
-            if (res.error) throw new Error(res.error);
-            cb(res.raw_body);
-        });
-    });
-
-    socket.on("reciveData", async (data) => {
-        const t = await db.sequelize.transaction();
-        try {
-            if (data.status) {
-                var saldo = HtmlTableToJson.parse(data.response.saldo).results;
-                var mutasi = HtmlTableToJson.parse(data.response.mutasi).results;
-                mutasi = mutasi[0].map((e) => {
-                    e.idTransaksi = data.request.id;
-                    return e;
-
-                });
-                
-                const result = await db.transaction.update({
-                    status: 1,
-                    saldo: saldo[0][0]["Saldo"]
-                },
-                    {
-                        where: {
-                            id: data.request.id,
-                        },
-                    },
-                    { transaction: t }
-                );
-
-                await db.mutasi.bulkCreate(mutasi, { transaction: t });
-            }else{
-                const result = await db.transaction.update({
-                    status: 1,
-                    error: data.error
-                },
-                    {
-                        where: {
-                            id: data.request.id,
-                        },
-                    },
-                    { transaction: t }
-                );
-            }
-            await t.commit();
-        } catch (error) {
-            console.log(error);
-            await t.rollback();
-        }
-    });
-});
-
 app.post("/request", async (req, res) => {
     const username = req.body.username;
     const password = req.body.password;
     const noRek = req.body.noRek;
+    const proxy = req.body.proxy;
 
     var error = null;
     if (!username || username == "")
@@ -104,91 +36,208 @@ app.post("/request", async (req, res) => {
         error == null
         ? (error = { noRek: "Nomor Rekening tidak boleh kosong" })
         : (error.noRek = "Nomor Rekening tidak boleh kosong");
+    if (!proxy || proxy == "")
+        error == null
+        ? (error = { noRek: "Data Proxy tidak boleh kosong" })
+        : (error.noRek = "Data Proxy tidak boleh kosong");
 
     if (error != null)
         return res.status(402).json({
             error: error,
         });
-
-    if (globalSocket == null)
-        return res.status(402).json({
-            error: {
-                client: "Maap belum ada socket yang terhubung ke server",
-            },
-        });
     
-    const t = await db.sequelize.transaction();
-    try {
-        const result = await db.transaction.create({
-            username: username,
-            nomorRekening: noRek,
-            status: 0,
-            saldo: "",
-            mutasi: "",
-            error: "",
-        },{ transaction: t });
-
-        await t.commit();
-        var x = req.body;
-        x.id = result.id;
-
-        io.to(globalSocket).emit("getMutasi", x);
-
-        res.status(200).json(result);
-    } catch (error) {
-        var message = "ada masalah di coding server";
-        if (error.original) {
-            if (error.original.sqlMessage) {
-                message = error.original.sqlMessage;
-            }
-        }
-        await t.rollback();
-        
-        return res.status(402).json({
-            error: {
-                server: message,
-            },
-        });
-
-    }
+    await launcherScrapt({
+        username: username,
+        password: password,
+        noRek: noRek,
+        proxy: proxy
+    }, (response) => {
+        console.log(response);
+        res.status(200).json(response);
+    })
 });
 
-app.get("/response", async (req, res) => {
-    var id = req.query.id;
-    if (!id || id == "") {
-        return res.status(402).json({
-            error: "ID tidak boleh kosong",
+async function launcherScrapt(data, cb) {
+    (async () => {
+        const chrome = await chromium.launch({
+            headless: false,
+            proxy: data.proxy
         });
-    }
+        const chrome_context = await chrome.newContext({
+            userAgent: randomUseragent.getRandom()
+        });
+      
+        // Open new page
+        var page = await chrome_context.newPage();
+      
+        // Go to https://ib.bri.co.id/ib-bri/
+        await page.goto('https://ib.bri.co.id/ib-bri/');
 
-    const t = await db.sequelize.transaction();
-    try {
-        const result = await db.transaction.findOne({
-            where: {
-                id: id
-            },
-            include: ['mutasi']
-        },{ transaction: t });
+        var chaptaLogin = null;
 
-        res.status(200).json(result);
-    } catch (error) {
-        var message = "ada masalah di coding server";
-        if (error.original) {
-            if (error.original.sqlMessage) {
-                message = error.original.sqlMessage;
+        await chekrejected(chrome_context, chrome, page, 1);
+        
+
+        async function login (content, brouser, pages) {
+            console.log("sudah masuk ke bagian login");
+            // cek apakah form sudah mucnul atau tidak
+            await pages.locator('#loginForm').waitFor("attached", 60000);
+            await pages.locator('[placeholder="user ID"]').click();
+          
+            const username = await pages.$$('[placeholder="user ID"]');
+            if (username) {
+                await pages.locator('[placeholder="user ID"]').fill(data.username);
+            } else {
+                await pages.locator('[placeholder="username"]').fill(data.username);
+            }
+          
+            // Press Tab
+            await pages.locator('[placeholder="user ID"]').press('Tab');
+          
+            // Fill [placeholder="password"]
+            await pages.locator('[placeholder="password"]').fill(data.password);
+          
+            // Press Tab
+            await pages.locator('[placeholder="password"]').press('Tab');
+
+            if (chaptaLogin) {
+                if (chaptaLogin.success) {
+                    console.log("ini data captca", chaptaLogin);
+                    await pages.locator('[placeholder="validation"]').fill(chaptaLogin.data);
+                    await pages.locator('button:has-text("Masuk")').click();
+
+                    var rejected = await pages.$$("text='The requested URL was rejected'");
+                    var blocked = await pages.$$("#captcha_audio");
+
+                    if (rejected.length > 0 || blocked.length > 0) {
+                        chekrejected(content, brouser, pages, 1);
+                    }else{
+                        await pages.waitForURL('https://ib.bri.co.id/ib-bri/Homepage.html', {
+                            timeout: 30000
+                        });
+        
+                        var error = await pages.$$("#errormsg-wrap");
+                        if (error.length > 0) {
+                            var textError = await pages.locator("#errormsg-wrap").textContent();
+                            cb({
+                                status: false,
+                                error: textError
+                            });
+                            await content.close();
+                            await brouser.close();
+                        }else {
+                            // Click #myaccounts
+                            await pages.locator('#myaccounts').click();
+            
+                            // mulai ambil data saldo
+                            await pages.frameLocator('iframe[name="menus"]').locator('a[href="BalanceInquiry.html"]').click();
+                            await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').waitFor("attached", 60000);
+                            var saldo = await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').innerHTML();
+                            console.log("saldo",saldo);
+    
+                            // mulai ambil data mutasi
+                            await pages.frameLocator('iframe[name="menus"]').locator('a[href="AccountStatement.html"]').click();
+                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('Escape');
+                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').click();
+                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('ArrowDown');
+                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('Enter');
+                            
+                            await pages.frameLocator('iframe[name="content"]').locator('input[name="submitButton"]').click();
+    
+                            await pages.frameLocator('iframe[name="content"]').locator('text=saldo akhir').waitFor("attached", 60000);
+    
+                            var mutasi = await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').innerHTML();
+                            console.log("mutasi",mutasi);
+    
+                            cb({
+                                status: true,
+                                data: {
+                                    account: data.username,
+                                    rekening: data.noRek,
+                                    raw: {
+                                        saldo: saldo,
+                                        mutasi: mutasi
+                                    }
+                                }
+                            })
+    
+                            pages.once('dialog', dialog => {
+                                console.log(`Dialog message: ${dialog.message()}`);
+                                dialog.dismiss().catch(() => {});
+                            });
+                            await pages.locator('text=Logout').first().click();
+                            await pages.waitForURL('https://ib.bri.co.id/ib-bri/Logout.html');
+    
+                            await content.close();
+                            await brouser.close();
+                        }
+                    }
+
+                    
+                }else{
+                    cb({
+                        status: chaptaLogin.success,
+                        error: chaptaLogin.error
+                    });
+                    await content.close();
+                    await brouser.close();
+                }
             }
         }
-        await t.rollback();
-        
-        return res.status(402).json({
-            error: {
-                server: message,
-            },
-        });
 
-    }
+        async function chekrejected (content, brouser, pages, ind) {
+            pages.on('response', function(res) {
+                console.log(res.url());
+                if (res.url() == "https://ib.bri.co.id/ib-bri/login/captcha") {
+                    res.body().then((e) => {
+                        getCaptcha(e.toString('base64'),(data) => {
+                            chaptaLogin = data.body;
+                        });
+                    })
+                }
+            });
 
+            await pages.waitForTimeout(3000);
+            var rejected = await pages.$$("text='The requested URL was rejected'");
+            var blocked = await pages.$$("#captcha_audio");
+            
+            if (ind < 10) {
+                if (rejected.length > 0 || blocked.length > 0) { // coba pake firefox
+                    await content.close();
+                    await brouser.close();
     
-})
+                    const chromeNew = await chromium.launch({
+                        headless: false,
+                    });
+                    const chrome_context_new = await chromeNew.newContext({
+                        userAgent: randomUseragent.getRandom()
+                    });
+                  
+                    // Open new page
+                    pages = await chrome_context_new.newPage();
+                  
+                    await pages.goto('https://ib.bri.co.id/ib-bri/');
+                    chekrejected(chrome_context_new, chromeNew, pages, ind+1);
+                }else {
+                    await login(content, brouser, pages);
+                }
+            }else {
+                await content.close();
+                await brouser.close();
 
-httpServer.listen(3000);
+                cb({
+                    status: false,
+                    error: "Semua user agent di block, silahkan coba beberapa saat lagi"
+                });
+            }
+        }
+      
+
+        
+      
+        // ---------------------
+        
+    })();
+}
+
+app.listen(3000);
