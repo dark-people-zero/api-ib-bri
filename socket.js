@@ -2,6 +2,7 @@ const express = require("express");
 const unirest = require("unirest");
 const { chromium } = require('playwright');
 const randomUseragent = require('random-useragent');
+const { raw } = require("express");
 const app = express();
 
 app.use(express.json());
@@ -22,6 +23,7 @@ app.post("/request", async (req, res) => {
     const password = req.body.password;
     const noRek = req.body.noRek;
     const proxy = req.body.proxy;
+    const type = req.body.type;
 
     var error = null;
     if (!username || username == "")
@@ -40,6 +42,10 @@ app.post("/request", async (req, res) => {
         error == null
         ? (error = { noRek: "Data Proxy tidak boleh kosong" })
         : (error.noRek = "Data Proxy tidak boleh kosong");
+    if (!type || type == "")
+        error == null
+        ? (error = { type: "Data Type tidak boleh kosong" })
+        : (error.type = "Data Type tidak boleh kosong");
 
     if (error != null)
         return res.status(402).json({
@@ -50,9 +56,9 @@ app.post("/request", async (req, res) => {
         username: username,
         password: password,
         noRek: noRek,
+        type: type,
         proxy: proxy
     }, (response) => {
-        console.log(response);
         res.status(200).json(response);
     })
 });
@@ -77,9 +83,7 @@ async function launcherScrapt(data, cb) {
 
         await chekrejected(chrome_context, chrome, page, 1);
         
-
         async function login (content, brouser, pages) {
-            console.log("sudah masuk ke bagian login");
             // cek apakah form sudah mucnul atau tidak
             await pages.locator('#loginForm').waitFor("attached", 60000);
             await pages.locator('[placeholder="user ID"]').click();
@@ -102,7 +106,6 @@ async function launcherScrapt(data, cb) {
 
             if (chaptaLogin) {
                 if (chaptaLogin.success) {
-                    console.log("ini data captca", chaptaLogin);
                     await pages.locator('[placeholder="validation"]').fill(chaptaLogin.data);
                     await pages.locator('button:has-text("Masuk")').click();
 
@@ -128,39 +131,40 @@ async function launcherScrapt(data, cb) {
                         }else {
                             // Click #myaccounts
                             await pages.locator('#myaccounts').click();
-            
-                            // mulai ambil data saldo
-                            await pages.frameLocator('iframe[name="menus"]').locator('a[href="BalanceInquiry.html"]').click();
-                            await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').waitFor("attached", 60000);
-                            var saldo = await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').innerHTML();
-                            console.log("saldo",saldo);
-    
-                            // mulai ambil data mutasi
-                            await pages.frameLocator('iframe[name="menus"]').locator('a[href="AccountStatement.html"]').click();
-                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('Escape');
-                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').click();
-                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('ArrowDown');
-                            await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('Enter');
-                            
-                            await pages.frameLocator('iframe[name="content"]').locator('input[name="submitButton"]').click();
-    
-                            await pages.frameLocator('iframe[name="content"]').locator('text=saldo akhir').waitFor("attached", 60000);
-    
-                            var mutasi = await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').innerHTML();
-                            console.log("mutasi",mutasi);
-    
-                            cb({
+                            var res = {
                                 status: true,
                                 data: {
+                                    type: data.type,
                                     account: data.username,
                                     rekening: data.noRek,
-                                    raw: {
-                                        saldo: saldo,
-                                        mutasi: mutasi
-                                    }
+                                    raw: null
                                 }
-                            })
+                            }
+                            
+                            // mulai dari sini untuk ambil saldo atau mutasi
+                            // mulai ambil data saldo
+                            if (data.type == "saldo") {
+                                await pages.frameLocator('iframe[name="menus"]').locator('a[href="BalanceInquiry.html"]').click();
+                                await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').waitFor("attached", 60000);
+                                // var saldo = await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').innerHTML();
+                                res.data.raw = await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').innerHTML();
+                            }
     
+                            // mulai ambil data mutasi
+                            if (data.type == "mutasi") {
+                                await pages.frameLocator('iframe[name="menus"]').locator('a[href="AccountStatement.html"]').click();
+                                await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('Escape');
+                                await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').click();
+                                await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('ArrowDown');
+                                await pages.frameLocator('iframe[name="content"]').locator('#ACCOUNT_NO').press('Enter');
+                                await pages.frameLocator('iframe[name="content"]').locator('input[name="submitButton"]').click();
+                                await pages.frameLocator('iframe[name="content"]').locator('text=saldo akhir').waitFor("attached", 60000);
+
+                                res.data.raw = await pages.frameLocator('iframe[name="content"]').locator('#tabel-saldo').innerHTML();
+                            }
+
+                            cb(res);
+
                             pages.once('dialog', dialog => {
                                 console.log(`Dialog message: ${dialog.message()}`);
                                 dialog.dismiss().catch(() => {});
@@ -187,7 +191,6 @@ async function launcherScrapt(data, cb) {
 
         async function chekrejected (content, brouser, pages, ind) {
             pages.on('response', function(res) {
-                console.log(res.url());
                 if (res.url() == "https://ib.bri.co.id/ib-bri/login/captcha") {
                     res.body().then((e) => {
                         getCaptcha(e.toString('base64'),(data) => {
@@ -231,12 +234,7 @@ async function launcherScrapt(data, cb) {
                 });
             }
         }
-      
-
-        
-      
-        // ---------------------
-        
+    
     })();
 }
 
